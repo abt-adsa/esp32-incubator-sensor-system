@@ -1,11 +1,13 @@
 // --- Library Includes ---
 #include <Arduino.h>
+#include <Wifi.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <SPI.h>
+#include <ThingSpeak.h>
 #include "MAX30105.h"
 #include "heartRate.h"
 #include <deque>
@@ -13,6 +15,12 @@
 #include <vector>
 
 // --- Configuration Constants ---
+
+// Wireless credentials
+constexpr char* SSID = "SSID";
+constexpr char* PASSWORD = "PASSWORD"; 
+constexpr uint32_t CHANNEL_ID = 0;
+constexpr char* WRITE_API_KEY = "API KEY";
 
 // Pin configuration for sensors
 constexpr uint8_t BME_SCK = 25;
@@ -24,14 +32,14 @@ constexpr uint8_t MIC_PIN = 14;
 // Timing constants (in milliseconds)
 constexpr uint32_t SAMPLING_INTERVAL = 500;
 constexpr uint32_t HOUR_IN_MS = 3600000;
-constexpr uint32_t DISPLAY_INTERVAL = 1000;     // Display update interval
+constexpr uint32_t DISPLAY_UPDATE_INTERVAL = 1000; 
 constexpr uint32_t UPLOAD_INTERVAL = 20000;
 
 // Sound measurement constants
-constexpr int16_t BIAS = 1920;                  // Bias
-constexpr float SPL_REF = 94.0f;                // Reference sound pressure level (dB)
-constexpr float PEAK_REF = 0.00631f;            // Reference amplitude (Pa)
-constexpr float AMP_GAIN = 80.0f;               // Amplifier gain for the mic
+constexpr int16_t BIAS = 1920;
+constexpr float SPL_REF = 94.0f;                               // Reference sound pressure level (dB)
+constexpr float PEAK_REF = 0.00631f;                           // Reference amplitude (Pa)
+constexpr float AMP_GAIN = 80.0f;                              // Amplifier gain for the mic
 constexpr size_t BUFFER_SIZE = HOUR_IN_MS / SAMPLING_INTERVAL; // 1-hour rolling window size
 
 // Display settings
@@ -42,29 +50,30 @@ constexpr uint16_t OLED_HEIGHT = 64;
 constexpr uint8_t RATE_SIZE = 10;   // Sample size for heart rate averaging
 constexpr uint8_t NUM_SAMPLES = 10; // Sample size for environmental averaging
 
-// --- Sensor Objects ---
-MAX30105 particleSensor;                     // Heart rate sensor object
-Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);  // OLED display object
-Adafruit_BME280 bme(BME_CS, BME_MOSI, BME_MISO, BME_SCK);      // Environmental sensor object
+// --- Sensor & Functionality Objects ---
+MAX30105 particleSensor;                                      // Heart rate sensor object
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1); // OLED display object
+Adafruit_BME280 bme(BME_CS, BME_MOSI, BME_MISO, BME_SCK);     // Environmental sensor object
+WiFiClient client;                                            // WiFi Object
 
 // --- Monitoring Variables ---
 
 // Heart rate monitoring variables
-uint8_t rates[RATE_SIZE];           // Heart rate sample array
-uint8_t rateSpot = 0;               // Index for storing new heart rate samples
-uint32_t lastBeat = 0;              // Last detected beat timestamp
+uint8_t rates[RATE_SIZE]; // Heart rate sample array
+uint8_t rateSpot = 0;     // Index for storing new heart rate samples
+uint32_t lastBeat = 0;    // Last detected beat timestamp
 
 // Environmental monitoring variables
-float temperatureSamples[NUM_SAMPLES];  // Temperature sample array
-float humiditySamples[NUM_SAMPLES];     // Humidity sample array
-uint8_t sampleIndex = 0;
+float temperatureSamples[NUM_SAMPLES]; // Temperature sample array
+float humiditySamples[NUM_SAMPLES];    // Humidity sample array
+uint8_t sampleIndex = 0;                
 
 // Sound level monitoring variables
-std::deque<float> splBuffer;     // Rolling buffer for sound pressure level samples
+std::deque<float> splBuffer; // Rolling buffer for sound pressure level samples
 
 // Timing control variables
-uint32_t lastUpload = 0;         // Last ThingSpeak upload timestamp
-uint32_t lastDisplayUpdate = 0;  // Last display update timestamp
+uint32_t lastUpload = 0;
+uint32_t lastDisplayUpdate = 0;
 
 // --- Function Declarations ---
 void initializeWireless();
@@ -81,10 +90,15 @@ void updateDisplay(float bpm, float bpmAvg, float temperature, float humidity, f
                    float humidityAvg, float Leq, float Lmax, float L10);
 void checkAlarm(float bpm, float bpmAvg, float temperature, float humidity, float temperatureAvg,
                 float humidityAvg, float Leq, float Lmax, float L10);
+void dataUpload(float bpm, float temperature, float humidity, float spl);
 
 // --- Setup ---
 void setup() {
     Serial.begin(115200);
+
+    Serial.println(F("Initializing wireless connections..."));
+
+    initializeWireless();
 
     Serial.println(F("Initializing peripherals..."));
 
@@ -99,7 +113,7 @@ void loop() {
     float bpm = 0, bpmAvg = 0;
     sampleHeartRate(bpm, bpmAvg);
 
-    if (millis() - lastDisplayUpdate >= DISPLAY_INTERVAL) {
+    if (millis() - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
         lastDisplayUpdate = millis();
 
         float temperature = 0.0f, humidity = 0.0f, temperatureAvg = 0.0f, humidityAvg = 0.0f;
@@ -110,10 +124,30 @@ void loop() {
 
         updateDisplay(bpm, bpmAvg, temperature, humidity, temperatureAvg, humidityAvg, Leq, Lmax, L10);
         checkAlarm(bpm, bpmAvg, temperature, humidity, temperatureAvg, humidityAvg, Leq, Lmax, L10);
+
+        if (millis() - lastUpload >= UPLOAD_INTERVAL) {
+            lastUpload = millis();
+
+            dataUpload(bpm, temperature, humidity, spl);
+        }
     }
 }
 
 // --- Initialization Functions ---
+
+void initializeWireless() {
+    WiFi.begin(SSID, PASSWORD);
+    Serial.print("Connecting to Wi-Fi");
+
+    while (WiFi.status() != WL_CONNECTED) { 
+        delay(500);
+        Serial.print(".");
+    }
+
+    Serial.println("\nConnected to Wi-Fi!");
+
+    ThingSpeak.begin(client);
+}
 
 void initializeDisplay() {
     if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
@@ -280,15 +314,15 @@ void checkAlarm(float bpm, float bpmAvg, float temperature, float humidity, floa
     String alarmMessage = "(!) ";
     bool alarmTriggered = false;
 
-    if ((bpmAvg < 70 || bpmAvg > 190) && (bpm < 70 || bpm > 190)) {
+    if ((bpm < 70 || bpm > 190) && (bpmAvg < 70 || bpmAvg > 190)) {
         alarmMessage += "HR, ";
         alarmTriggered = true;
     }
-    if ((temperatureAvg < 22 || temperatureAvg > 26) && (temperature < 22 || temperature > 26)) {
+    if ((temperature < 22 || temperature > 26) && (temperatureAvg < 22 || temperatureAvg > 26)) {
         alarmMessage += "T, ";
         alarmTriggered = true;
     }
-    if ((humidityAvg < 30 || humidityAvg > 60) && (humidity < 30 || humidity > 30)) {
+    if ((humidity < 30 || humidity > 30) && (humidityAvg < 30 || humidityAvg > 60)) {
         alarmMessage += "RH, ";
         alarmTriggered = true;
     }
@@ -303,5 +337,22 @@ void checkAlarm(float bpm, float bpmAvg, float temperature, float humidity, floa
         display.setCursor(0, OLED_HEIGHT - 10);
         display.print(alarmMessage);
         display.display();
+    }
+}
+
+// --- Data Upload Function ---
+void dataUpload(float bpm, float temperature, float humidity, float spl) {
+
+    ThingSpeak.setField(1, bpm);
+    ThingSpeak.setField(2, temperature);
+    ThingSpeak.setField(3, humidity);
+    ThingSpeak.setField(4, spl);
+
+    int httpCode = ThingSpeak.writeFields(CHANNEL_ID, WRITE_API_KEY);
+
+    if (httpCode == 200) {
+        Serial.println("Data uploaded successfully");
+    } else {
+        Serial.println("Failed to upload data: " + String(httpCode));
     }
 }
