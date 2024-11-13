@@ -1,15 +1,19 @@
 // --- Library Includes ---
 #include <Arduino.h>
-#include <Wifi.h>
+#include <SPI.h>
 #include <Wire.h>
+
+#include <Wifi.h>
+#include <ThingSpeak.h>
+
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
-#include <SPI.h>
-#include <ThingSpeak.h>
 #include "MAX30105.h"
 #include "heartRate.h"
+
 #include <deque>
 #include <algorithm>
 #include <vector>
@@ -17,17 +21,17 @@
 // --- Configuration Constants ---
 
 // Wireless credentials
-constexpr char* SSID = "SSID";
-constexpr char* PASSWORD = "PASSWORD"; 
+constexpr const char* SSID = "SSID";
+constexpr const char* PASSWORD = "PASSWORD*"; 
 constexpr uint32_t CHANNEL_ID = 0;
-constexpr char* WRITE_API_KEY = "API KEY";
+constexpr const char* WRITE_API_KEY = "WRITE API KEY";
 
 // Pin configuration for sensors
 constexpr uint8_t BME_SCK = 25;
 constexpr uint8_t BME_MISO = 32;
 constexpr uint8_t BME_MOSI = 26;
 constexpr uint8_t BME_CS = 33;
-constexpr uint8_t MIC_PIN = 14;
+constexpr uint8_t MIC_PIN = 35;
 
 // Timing constants (in milliseconds)
 constexpr uint32_t SAMPLING_INTERVAL = 500;
@@ -47,7 +51,7 @@ constexpr uint16_t OLED_WIDTH = 128;
 constexpr uint16_t OLED_HEIGHT = 64;
 
 // Sampling constants
-constexpr uint8_t RATE_SIZE = 10;   // Sample size for heart rate averaging
+constexpr uint8_t RATE_SIZE = 20;   // Sample size for heart rate averaging
 constexpr uint8_t NUM_SAMPLES = 10; // Sample size for environmental averaging
 
 // --- Sensor & Functionality Objects ---
@@ -62,6 +66,8 @@ WiFiClient client;                                            // WiFi Object
 uint8_t rates[RATE_SIZE]; // Heart rate sample array
 uint8_t rateSpot = 0;     // Index for storing new heart rate samples
 uint32_t lastBeat = 0;    // Last detected beat timestamp
+int bpm = 0;
+float bpmAvg = 0.0f;
 
 // Environmental monitoring variables
 float temperatureSamples[NUM_SAMPLES]; // Temperature sample array
@@ -80,17 +86,17 @@ void initializeWireless();
 void initializeDisplay();
 void initializeBME280();
 void initializeMAX30105();
-void sampleHeartRate(float &bpm, float &bpmAvg);
+void sampleHeartRate();
 void sampleEnvironmentalData(float &temperature, float &humidity, float &temperatureAvg, float &humidityAvg);
 void sampleSoundLevels(float &spl, float &Leq, float &Lmax, float &L10);
 void calculateLeq(float &Leq);
 void calculateLmax(float &Lmax);
 void calculateL10(float &L10);
-void updateDisplay(float bpm, float bpmAvg, float temperature, float humidity, float temperatureAvg,
+void updateDisplay(int bpm, float bpmAvg, float temperature, float humidity, float temperatureAvg,
                    float humidityAvg, float Leq, float Lmax, float L10);
-void checkAlarm(float bpm, float bpmAvg, float temperature, float humidity, float temperatureAvg,
+void checkAlarm(int bpm, float bpmAvg, float temperature, float humidity, float temperatureAvg,
                 float humidityAvg, float Leq, float Lmax, float L10);
-void dataUpload(float bpm, float temperature, float humidity, float spl);
+void dataUpload(int bpm, float temperature, float humidity, float spl);
 
 // --- Setup ---
 void setup() {
@@ -109,9 +115,7 @@ void setup() {
 
 // --- Main Loop ---
 void loop() {
-
-    float bpm = 0, bpmAvg = 0;
-    sampleHeartRate(bpm, bpmAvg);
+    sampleHeartRate();
 
     if (millis() - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
         lastDisplayUpdate = millis();
@@ -183,7 +187,7 @@ void initializeMAX30105() {
 // --- Sampling Functions ---
 
 // Heart rate sampling and averaging
-void sampleHeartRate(float &bpm, float &bpmAvg) {
+void sampleHeartRate() {
     long irValue = particleSensor.getIR();
 
     if (checkForBeat(irValue)) {
@@ -275,7 +279,7 @@ void calculateL10(float &L10) {
 
 // --- Display Output Functions ---
 
-void updateDisplay(float bpm, float bpmAvg, float temperature, float humidity, float temperatureAvg,
+void updateDisplay(int bpm, float bpmAvg, float temperature, float humidity, float temperatureAvg,
                    float humidityAvg, float Leq, float Lmax, float L10) {
     display.clearDisplay();
     
@@ -309,7 +313,7 @@ void updateDisplay(float bpm, float bpmAvg, float temperature, float humidity, f
     display.display();
 }
 
-void checkAlarm(float bpm, float bpmAvg, float temperature, float humidity, float temperatureAvg,
+void checkAlarm(int bpm, float bpmAvg, float temperature, float humidity, float temperatureAvg,
                 float humidityAvg, float Leq, float Lmax, float L10) {
     String alarmMessage = "(!) ";
     bool alarmTriggered = false;
@@ -341,7 +345,7 @@ void checkAlarm(float bpm, float bpmAvg, float temperature, float humidity, floa
 }
 
 // --- Data Upload Function ---
-void dataUpload(float bpm, float temperature, float humidity, float spl) {
+void dataUpload(int bpm, float temperature, float humidity, float spl) {
 
     ThingSpeak.setField(1, bpm);
     ThingSpeak.setField(2, temperature);
