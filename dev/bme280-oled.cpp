@@ -6,14 +6,14 @@
 #include <Adafruit_BME280.h>
 #include <SPI.h>
 
-#define BME_SCK 25
-#define BME_MISO 32
-#define BME_MOSI 26
-#define BME_CS 33
-#define NUM_SAMPLES 10
+constexpr uint8_t BME_SCK = 25;
+constexpr uint8_t BME_MISO = 32;
+constexpr uint8_t BME_MOSI = 26;
+constexpr uint8_t BME_CS = 33;
+constexpr uint8_t NUM_SAMPLES = 10;
 
-#define OLED_WIDTH 128
-#define OLED_HEIGHT 64
+constexpr uint16_t OLED_WIDTH = 128;
+constexpr uint16_t OLED_HEIGHT = 64;
 
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 Adafruit_BME280 bme(BME_CS, BME_MOSI, BME_MISO, BME_SCK);
@@ -22,58 +22,52 @@ float temperatureSamples[NUM_SAMPLES];
 float humiditySamples[NUM_SAMPLES];
 int sampleIndex = 0;
 
-void checkAlarm(float avgTemp, float avgHumidity);
-void displayValues(float temperature, float humidity, float avgTemp, float avgHumidity);
+void initializeDisplay();
+void initializeBME();
+void checkAlarm(float temperatureAvg, float humidityAvg);
+void displayValues(float temperature, float humidity, float temperatureAvg, float humidityAvg);
+void sampleEnvironmentalData(float &temperature, float &humidity, float &temperatureAvg, float &humidityAvg);
 
 void setup() {
   Serial.begin(9600);
   Serial.println(F("BME280 test"));
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("SSD1306 allocation failed"));
-    for (;;);
-  }
-  
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0, 0);
+  initializeDisplay();
+  initializeBME();
 
-  if (!bme.begin()) {
-    Serial.println("Could not find a valid BME280 sensor, check wiring!");
-    while (1);
-  }
-
-  Serial.println("-- Default Test --");
   delay(2000);
 }
 
 void loop() {
-  temperatureSamples[sampleIndex] = bme.readTemperature();
-  humiditySamples[sampleIndex] = bme.readHumidity();
-  sampleIndex = (sampleIndex + 1) % NUM_SAMPLES;
+  float temperature = 0.0f, humidity = 0.0f, temperatureAvg = 0.0f, humidityAvg = 0.0f;
+  sampleEnvironmentalData(temperature, humidity, temperatureAvg, humidityAvg);
 
-  float avgTemp = 0, avgHumidity = 0;
+  displayValues(temperature, humidity, temperatureAvg, humidityAvg);
 
-  for (int i = 0; i < NUM_SAMPLES; i++) {
-      avgTemp += temperatureSamples[i];
-      avgHumidity += humiditySamples[i];
-  }
-
-  avgTemp /= NUM_SAMPLES;
-  avgHumidity /= NUM_SAMPLES;
-
-  float temperature = bme.readTemperature();
-  float humidity = bme.readHumidity();
-
-  displayValues(temperature, humidity, avgTemp, avgHumidity);
-
-  checkAlarm(avgTemp, avgHumidity);
+  checkAlarm(temperatureAvg, humidityAvg);
 
   delay(1000);
 }
 
-void displayValues(float temperature, float humidity, float avgTemp, float avgHumidity) {
+void initializeDisplay() {
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        Serial.println(F("SSD1306 allocation failed"));
+        while (1);
+    }
+
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+}
+
+void initializeBME() {
+  if (!bme.begin()) {
+    Serial.println("Could not find a valid BME280 sensor, check wiring!");
+    while (1);
+  }
+}
+
+void displayValues(float temperature, float humidity, float temperatureAvg, float humidityAvg) {
   Serial.print("Current Temperature = ");
   Serial.print(temperature);
   Serial.println(" *C");
@@ -83,11 +77,11 @@ void displayValues(float temperature, float humidity, float avgTemp, float avgHu
   Serial.println(" %");
 
   Serial.print("Average Temperature = ");
-  Serial.print(avgTemp);
+  Serial.print(temperatureAvg);
   Serial.println(" *C");
 
   Serial.print("Average Humidity = ");
-  Serial.print(avgHumidity);
+  Serial.print(humidityAvg);
   Serial.println(" %");
 
   display.clearDisplay();
@@ -101,27 +95,27 @@ void displayValues(float temperature, float humidity, float avgTemp, float avgHu
   display.println(" %");
 
   display.print(" AvT: ");
-  display.print(avgTemp);
+  display.print(temperatureAvg);
   display.println(" *C");
 
   display.print("AvRH: ");
-  display.print(avgHumidity);
+  display.print(humidityAvg);
   display.println(" %");
 
   display.display();
 }
 
-void checkAlarm(float avgTemp, float avgHumidity) {
+void checkAlarm(float temperatureAvg, float humidityAvg) {
     String alarmMessage = "(!) ";
 
     bool alarmTriggered = false;
 
-    if (avgTemp < 22 || avgTemp > 26) {
+    if (temperatureAvg < 22 || temperatureAvg > 26) {
         alarmMessage += "T, ";
         alarmTriggered = true;
     }
 
-    if (avgHumidity < 30 || avgHumidity > 60) {
+    if (humidityAvg < 30 || humidityAvg > 60) {
         alarmMessage += "RH, ";
         alarmTriggered = true;
     }
@@ -134,4 +128,24 @@ void checkAlarm(float avgTemp, float avgHumidity) {
         display.print(alarmMessage);
         display.display();
     }
+}
+
+void sampleEnvironmentalData(float &temperature, float &humidity, float &temperatureAvg, float &humidityAvg) {
+    temperature = bme.readTemperature();
+    humidity = bme.readHumidity();
+
+    temperatureSamples[sampleIndex] = temperature;
+    humiditySamples[sampleIndex] = humidity;
+    sampleIndex = (sampleIndex + 1) % NUM_SAMPLES;
+
+    temperatureAvg = 0;
+    humidityAvg = 0;
+
+    for (uint8_t i = 0; i < NUM_SAMPLES; i++) {
+        temperatureAvg += temperatureSamples[i];
+        humidityAvg += humiditySamples[i];
+    }
+
+    temperatureAvg /= NUM_SAMPLES;
+    humidityAvg /= NUM_SAMPLES;
 }
